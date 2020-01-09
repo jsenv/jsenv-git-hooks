@@ -38,7 +38,8 @@
     "postinstall": "npm run generate-import-map && npm run install-git-hooks",
     "prepublishOnly": "node ./script/transform-package/remove-postinstall.js && npm run dist",
     "postpublish": "node ./script/transform-package/restore-postinstall.js",
-    "git-hook-pre-commit": "node ./script/precommit.js"
+    "git-hook-pre-commit": "node ./script/precommit.js | xargs git diff --cached --name-only --diff-filter=AM",
+    "git-hook-post-commit": "git update-index -g"
   },
   "dependencies": {
     "@jsenv/logger": "3.2.0",
