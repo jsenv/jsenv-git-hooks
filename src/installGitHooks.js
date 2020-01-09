@@ -5,7 +5,6 @@ import {
   readFile,
   readFileSystemNodeStat,
   urlToFileSystemPath,
-  urlToRelativeUrl,
   writeFileSystemNodePermissions,
 } from "@jsenv/util"
 import { createLogger } from "@jsenv/logger"
@@ -27,13 +26,17 @@ export const installGitHooks = async ({ logLevel, projectDirectoryUrl }) => {
     projectDirectoryUrl,
   })
 
+  const gitHookNames = Object.keys(gitHooks)
+  if (gitHookNames.length === 0) {
+    logger.debug(`no git hooks in package.json scripts`)
+    return
+  }
+
   await Promise.all(
-    Object.keys(gitHooks).map(async (hookName) => {
+    gitHookNames.map(async (hookName) => {
       const hookCommand = gitHooks[hookName]
       const gitHookFileUrl = resolveUrl(`.git/hooks/${hookName}`, projectDirectoryUrl)
-      const projectDirectoryRelativeUrl = urlToRelativeUrl(projectDirectoryUrl, gitHookFileUrl)
       const gitHookFileContent = `#!/bin/sh
-cd "${projectDirectoryRelativeUrl}"
 ${hookCommand}`
       // should we add exit 0 ?
 
@@ -43,20 +46,21 @@ ${hookCommand}`
       if (gitHookFileStats) {
         const gitHookFilePreviousContent = await readFile(gitHookFileUrl)
         if (gitHookFilePreviousContent === gitHookFileContent) {
+          logger.debug(`already installed git ${hookName} hook`)
           return
         }
         logger.debug(`
 update git ${hookName} hook
---- current command ---
-${gitHookFileContent}
---- new command ---
+--- previous file content ---
+${gitHookFilePreviousContent}
+--- file content ---
 ${gitHookFileContent}
 --- file ---
 ${urlToFileSystemPath(gitHookFileUrl)}`)
       } else {
         logger.debug(`
 write git ${hookName} hook
---- command ---
+--- file content ---
 ${gitHookFileContent}
 --- file ---
 ${urlToFileSystemPath(gitHookFileUrl)}`)

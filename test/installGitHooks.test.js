@@ -36,7 +36,6 @@ await ensureEmptyDirectory(tempDirectoryUrl)
   }
   const expected = {
     precommitHookFileContent: `#!/bin/sh
-cd "../../"
 node ./whatever.js`,
     precommitHookFilePermissions: {
       owner: { read: true, write: true, execute: true },

@@ -11,7 +11,11 @@ export const readGitHooksFromPackage = async ({ logger, projectDirectoryUrl }) =
     if (key.startsWith("git-hook-")) {
       const hookName = key.slice("git-hook-".length)
       if (!hookList.includes(hookName)) {
-        logger.warn(`unknow hook: ${hookName}`)
+        logger.warn(`
+unknow hook: ${hookName}
+--- available hooks ---
+${JSON.stringify(hookList, null, "  ")}
+`)
         return
       }
 
