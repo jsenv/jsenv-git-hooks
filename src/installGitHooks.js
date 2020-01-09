@@ -6,9 +6,12 @@ import {
   readFileSystemNodeStat,
   urlToFileSystemPath,
   urlToRelativeUrl,
+  writeFileSystemNodePermissions,
 } from "@jsenv/util"
 import { createLogger } from "@jsenv/logger"
 import { readGitHooksFromPackage } from "./readGitHooksFromPackage.js"
+
+// https://github.com/typicode/husky/blob/master/src/installer/getScript.ts
 
 export const installGitHooks = async ({ logLevel, projectDirectoryUrl }) => {
   if (process.env.CI) {
@@ -27,8 +30,8 @@ export const installGitHooks = async ({ logLevel, projectDirectoryUrl }) => {
   await Promise.all(
     Object.keys(gitHooks).map(async (hookName) => {
       const hookCommand = gitHooks[hookName]
-      const gitHookFileUrl = resolveUrl(`.git/hooks/${hookCommand}`, projectDirectoryUrl)
-      const projectDirectoryRelativeUrl = urlToRelativeUrl(gitHookFileUrl, projectDirectoryUrl)
+      const gitHookFileUrl = resolveUrl(`.git/hooks/${hookName}`, projectDirectoryUrl)
+      const projectDirectoryRelativeUrl = urlToRelativeUrl(projectDirectoryUrl, gitHookFileUrl)
       const gitHookFileContent = `#!/bin/sh
 cd "${projectDirectoryRelativeUrl}"
 ${hookCommand}`
@@ -60,8 +63,11 @@ ${urlToFileSystemPath(gitHookFileUrl)}`)
       }
 
       await writeFile(gitHookFileUrl, gitHookFileContent)
-      // fo I have to set execute permission on that file ?
-      // fs.chmodSync(filename, 0o0755)
+      await writeFileSystemNodePermissions(gitHookFileUrl, {
+        owner: { read: true, write: true, execute: true },
+        group: { read: true, write: false, execute: true },
+        others: { read: true, write: false, execute: true },
+      })
     }),
   )
 }
