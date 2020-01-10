@@ -14,7 +14,8 @@ export const readGitHooksFromPackage = async ({ logger, projectDirectoryUrl }) =
         logger.warn(`
 unknow hook: ${hookName}
 --- available hooks ---
-${JSON.stringify(hookList, null, "  ")}
+${hookList.join(`
+`)}
 `)
         return
       }

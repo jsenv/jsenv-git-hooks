@@ -10,9 +10,11 @@ import {
 import { createLogger } from "@jsenv/logger"
 import { readGitHooksFromPackage } from "./readGitHooksFromPackage.js"
 
+const isWindows = process.platform === "win32"
+
 // https://github.com/typicode/husky/blob/master/src/installer/getScript.ts
 
-export const installGitHooks = async ({ logLevel, projectDirectoryUrl }) => {
+export const installGitHooks = async ({ logLevel = "debug", projectDirectoryUrl }) => {
   const logger = createLogger({ logLevel })
   if (process.env.CI) {
     logger.debug(`process.env.CI -> skip installGitHooks`)
@@ -66,11 +68,13 @@ ${urlToFileSystemPath(gitHookFileUrl)}`)
       }
 
       await writeFile(gitHookFileUrl, gitHookFileContent)
-      await writeFileSystemNodePermissions(gitHookFileUrl, {
-        owner: { read: true, write: true, execute: true },
-        group: { read: true, write: false, execute: true },
-        others: { read: true, write: false, execute: true },
-      })
+      if (!isWindows) {
+        await writeFileSystemNodePermissions(gitHookFileUrl, {
+          owner: { read: true, write: true, execute: true },
+          group: { read: true, write: false, execute: true },
+          others: { read: true, write: false, execute: true },
+        })
+      }
     }),
   )
 }
