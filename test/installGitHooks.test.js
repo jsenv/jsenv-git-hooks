@@ -29,6 +29,7 @@ await ensureEmptyDirectory(tempDirectoryUrl)
 
   await installGitHooks({
     projectDirectoryUrl: tempDirectoryUrl,
+    ci: false,
   })
   const actual = {
     precommitHookFileContent: await readFile(preCommitHookFileUrl),

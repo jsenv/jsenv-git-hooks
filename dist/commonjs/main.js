@@ -101,43 +101,45 @@ const statsToType = stats => {
 };
 
 const urlToFileSystemPath = fileUrl => {
-  return url.fileURLToPath(fileUrl);
+  if (fileUrl[fileUrl.length - 1] === "/") {
+    // remove trailing / so that nodejs path becomes predictable otherwise it logs
+    // the trailing slash on linux but does not on windows
+    fileUrl = fileUrl.slice(0, -1);
+  }
+
+  const fileSystemPath = url.fileURLToPath(fileUrl);
+  return fileSystemPath;
 };
 
+// https://github.com/coderaiser/cloudcmd/issues/63#issuecomment-195478143
 // https://nodejs.org/api/fs.html#fs_file_modes
-const {
-  S_IRUSR,
-  S_IWUSR,
-  S_IXUSR,
-  S_IRGRP,
-  S_IWGRP,
-  S_IXGRP,
-  S_IROTH,
-  S_IWOTH,
-  S_IXOTH
-} = fs.constants;
-const binaryFlagsToPermissions = binaryFlags => {
-  const owner = {
-    read: Boolean(binaryFlags & S_IRUSR),
-    write: Boolean(binaryFlags & S_IWUSR),
-    execute: Boolean(binaryFlags & S_IXUSR)
-  };
-  const group = {
-    read: Boolean(binaryFlags & S_IRGRP),
-    write: Boolean(binaryFlags & S_IWGRP),
-    execute: Boolean(binaryFlags & S_IXGRP)
-  };
-  const others = {
-    read: Boolean(binaryFlags & S_IROTH),
-    write: Boolean(binaryFlags & S_IWOTH),
-    execute: Boolean(binaryFlags & S_IXOTH)
-  };
-  return {
-    owner,
-    group,
-    others
-  };
-};
+// https://github.com/TooTallNate/stat-mode
+// cannot get from fs.constants because they are not available on windows
+const S_IRUSR = 256;
+/* 0000400 read permission, owner */
+
+const S_IWUSR = 128;
+/* 0000200 write permission, owner */
+
+const S_IXUSR = 64;
+/* 0000100 execute/search permission, owner */
+
+const S_IRGRP = 32;
+/* 0000040 read permission, group */
+
+const S_IWGRP = 16;
+/* 0000020 write permission, group */
+
+const S_IXGRP = 8;
+/* 0000010 execute/search permission, group */
+
+const S_IROTH = 4;
+/* 0000004 read permission, others */
+
+const S_IWOTH = 2;
+/* 0000002 write permission, others */
+
+const S_IXOTH = 1;
 const permissionsToBinaryFlags = ({
   owner,
   group,
@@ -154,18 +156,6 @@ const permissionsToBinaryFlags = ({
   if (others.write) binaryFlags |= S_IWOTH;
   if (others.execute) binaryFlags |= S_IXOTH;
   return binaryFlags;
-};
-
-const {
-  stat
-} = fs.promises;
-const readFileSystemNodePermissions = async source => {
-  const sourceUrl = assertAndNormalizeFileUrl(source);
-  const sourcePath = urlToFileSystemPath(sourceUrl);
-  const {
-    mode
-  } = await stat(sourcePath);
-  return binaryFlagsToPermissions(mode);
 };
 
 const writeFileSystemNodePermissions = async (source, permissions) => {
@@ -251,35 +241,7 @@ const getPermissionOrComputeDefault = (action, subject, permissions) => {
   return false;
 };
 
-const grantPermissionsOnFileSystemNode = async (source, {
-  read = false,
-  write = false,
-  execute = false
-}) => {
-  const sourceUrl = assertAndNormalizeFileUrl(source);
-  const filePermissions = await readFileSystemNodePermissions(sourceUrl);
-  await writeFileSystemNodePermissions(sourceUrl, {
-    owner: {
-      read,
-      write,
-      execute
-    },
-    group: {
-      read,
-      write,
-      execute
-    },
-    others: {
-      read,
-      write,
-      execute
-    }
-  });
-  return async () => {
-    await writeFileSystemNodePermissions(sourceUrl, filePermissions);
-  };
-};
-
+const isWindows = process.platform === "win32";
 const readFileSystemNodeStat = async (source, {
   nullIfNotFound = false,
   followLink = true
@@ -293,16 +255,14 @@ const readFileSystemNodeStat = async (source, {
   return readStat(sourcePath, {
     followLink,
     ...handleNotFoundOption,
-    handlePermissionDeniedError: async error => {
+    ...(isWindows ? {
       // Windows can EPERM on stat
-      try {
-        const restorePermission = await grantPermissionsOnFileSystemNode(sourceUrl, {
-          read: true,
-          write: true,
-          execute: true
-        });
-
+      handlePermissionDeniedError: async error => {
+        // unfortunately it means we mutate the permissions
+        // without being able to restore them to the previous value
+        // (because reading current permission would also throw)
         try {
+          await writeFileSystemNodePermissions(sourceUrl, 0o666);
           const stats = await readStat(sourcePath, {
             followLink,
             ...handleNotFoundOption,
@@ -312,14 +272,12 @@ const readFileSystemNodeStat = async (source, {
             }
           });
           return stats;
-        } finally {
-          await restorePermission();
+        } catch (e) {
+          // failed to write permission or readState, throw original error as well
+          throw error;
         }
-      } catch (e) {
-        // failed to grant permissions, throw original error as well
-        throw error;
       }
-    }
+    } : {})
   });
 };
 
@@ -394,7 +352,7 @@ const resolveUrl = (specifier, baseUrl) => {
   return String(new URL(specifier, baseUrl));
 };
 
-const isWindows = process.platform === "win32";
+const isWindows$1 = process.platform === "win32";
 const baseUrlFallback = fileSystemPathToUrl(process.cwd());
 
 const ensureParentDirectories = async destination => {
@@ -406,6 +364,8 @@ const ensureParentDirectories = async destination => {
     allowUseless: true
   });
 };
+
+const isWindows$2 = process.platform === "win32";
 
 const readFilePromisified = util.promisify(fs.readFile);
 const readFile = async value => {
@@ -534,7 +494,8 @@ const readGitHooksFromPackage = async ({
         logger.warn(`
 unknow hook: ${hookName}
 --- available hooks ---
-${JSON.stringify(hookList, null, "  ")}
+${hookList.join(`
+`)}
 `);
         return;
       }
@@ -546,19 +507,23 @@ ${JSON.stringify(hookList, null, "  ")}
 };
 const hookList = ["applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update", "post-receive", "post-update", "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate"];
 
+const isWindows$3 = process.platform === "win32"; // https://github.com/typicode/husky/blob/master/src/installer/getScript.ts
+
 const installGitHooks = async ({
-  logLevel,
-  projectDirectoryUrl
+  logLevel = "debug",
+  projectDirectoryUrl,
+  ci = process.env.CI
 }) => {
-  if (process.env.CI) {
-    logger.debug(`process.env.CI -> skip installGitHooks`);
+  const logger = createLogger({
+    logLevel
+  });
+
+  if (ci) {
+    logger.debug(`ci -> skip installGitHooks`);
     return;
   }
 
   projectDirectoryUrl = assertAndNormalizeDirectoryUrl(projectDirectoryUrl);
-  const logger = createLogger({
-    logLevel
-  });
   const gitHooks = await readGitHooksFromPackage({
     logger,
     projectDirectoryUrl
@@ -590,39 +555,42 @@ ${hookCommand}`; // should we add exit 0 ?
 
       logger.debug(`
 update git ${hookName} hook
---- current command ---
-${gitHookFileContent}
---- new command ---
+--- previous file content ---
+${gitHookFilePreviousContent}
+--- file content ---
 ${gitHookFileContent}
 --- file ---
 ${urlToFileSystemPath(gitHookFileUrl)}`);
     } else {
       logger.debug(`
 write git ${hookName} hook
---- command ---
+--- file content ---
 ${gitHookFileContent}
 --- file ---
 ${urlToFileSystemPath(gitHookFileUrl)}`);
     }
 
     await writeFile(gitHookFileUrl, gitHookFileContent);
-    await writeFileSystemNodePermissions(gitHookFileUrl, {
-      owner: {
-        read: true,
-        write: true,
-        execute: true
-      },
-      group: {
-        read: true,
-        write: false,
-        execute: true
-      },
-      others: {
-        read: true,
-        write: false,
-        execute: true
-      }
-    });
+
+    if (!isWindows$3) {
+      await writeFileSystemNodePermissions(gitHookFileUrl, {
+        owner: {
+          read: true,
+          write: true,
+          execute: true
+        },
+        group: {
+          read: true,
+          write: false,
+          execute: true
+        },
+        others: {
+          read: true,
+          write: false,
+          execute: true
+        }
+      });
+    }
   }));
 };
 

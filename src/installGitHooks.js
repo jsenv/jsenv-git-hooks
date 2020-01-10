@@ -14,10 +14,14 @@ const isWindows = process.platform === "win32"
 
 // https://github.com/typicode/husky/blob/master/src/installer/getScript.ts
 
-export const installGitHooks = async ({ logLevel = "debug", projectDirectoryUrl }) => {
+export const installGitHooks = async ({
+  logLevel = "debug",
+  projectDirectoryUrl,
+  ci = process.env.CI,
+}) => {
   const logger = createLogger({ logLevel })
-  if (process.env.CI) {
-    logger.debug(`process.env.CI -> skip installGitHooks`)
+  if (ci) {
+    logger.debug(`ci -> skip installGitHooks`)
     return
   }
 
