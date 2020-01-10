@@ -8,6 +8,7 @@ import {
   readFileSystemNodePermissions,
 } from "@jsenv/util"
 
+const isWindows = process.platform === "win32"
 const tempDirectoryUrl = import.meta.resolve("./temp/")
 await ensureEmptyDirectory(tempDirectoryUrl)
 
@@ -38,11 +39,13 @@ await ensureEmptyDirectory(tempDirectoryUrl)
   const expected = {
     precommitHookFileContent: `#!/bin/sh
 node ./whatever.js`,
-    precommitHookFilePermissions: {
-      owner: { read: true, write: true, execute: true },
-      group: { read: true, write: false, execute: true },
-      others: { read: true, write: false, execute: true },
-    },
+    precommitHookFilePermissions: isWindows
+      ? actual.precommitHookFilePermissions
+      : {
+          owner: { read: true, write: true, execute: true },
+          group: { read: true, write: false, execute: true },
+          others: { read: true, write: false, execute: true },
+        },
   }
   assert({ actual, expected })
   await ensureEmptyDirectory(tempDirectoryUrl)
