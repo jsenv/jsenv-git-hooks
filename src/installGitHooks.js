@@ -13,14 +13,13 @@ import { readGitHooksFromPackage } from "./readGitHooksFromPackage.js"
 // https://github.com/typicode/husky/blob/master/src/installer/getScript.ts
 
 export const installGitHooks = async ({ logLevel, projectDirectoryUrl }) => {
+  const logger = createLogger({ logLevel })
   if (process.env.CI) {
     logger.debug(`process.env.CI -> skip installGitHooks`)
     return
   }
 
   projectDirectoryUrl = assertAndNormalizeDirectoryUrl(projectDirectoryUrl)
-
-  const logger = createLogger({ logLevel })
   const gitHooks = await readGitHooksFromPackage({
     logger,
     projectDirectoryUrl,
