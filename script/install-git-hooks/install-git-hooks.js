@@ -4,5 +4,4 @@ const jsenvConfig = require("../../jsenv.config.js")
 
 installGitHooks({
   ...jsenvConfig,
-  logLevel: "debug",
 })
