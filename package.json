@@ -2,7 +2,7 @@
   "name": "@jsenv/git-hooks",
   "type": "module",
   "description": "Declare git hooks in your package.json.",
-  "version": "1.2.0-alpha.0",
+  "version": "1.2.0",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -27,7 +27,7 @@
     "test": "node ./script/test/test.js",
     "test-with-coverage": "node ./script/test/test.js --coverage",
     "eslint-check": "eslint .",
-    "prettier-check": "node ./script/prettier-check/prettier-check.js",
+    "format-with-prettier": "node ./script/format-with-prettier/format-with-prettier.js",
     "upload-coverage": "node ./script/upload-coverage/upload-coverage.js",
     "generate-commonjs-bundle": "node ./script/generate-commonjs-bundle/generate-commonjs-bundle.js",
     "generate-import-map": "node ./script/generate-import-map/generate-import-map.js",
@@ -38,7 +38,7 @@
     "postinstall": "npm run generate-import-map && npm run install-git-hooks",
     "prepublishOnly": "node ./script/transform-package/remove-postinstall.js && npm run dist",
     "postpublish": "node ./script/transform-package/restore-postinstall.js",
-    "git-hook-pre-commit": "node ./script/precommit.js",
+    "git-hook-pre-commit": "npm run format-with-prettier -- --staged",
     "git-hook-post-commit": "git update-index -g"
   },
   "dependencies": {
@@ -48,17 +48,16 @@
   "devDependencies": {
     "@jsenv/assert": "1.1.1",
     "@jsenv/codecov-upload": "3.1.0",
-    "@jsenv/core": "10.5.0-alpha.1",
-    "@jsenv/eslint-config": "12.0.1",
+    "@jsenv/core": "10.5.0",
+    "@jsenv/eslint-config": "12.1.0",
     "@jsenv/git-hooks": "1.2.0-alpha.0",
     "@jsenv/github-release-package": "1.1.1",
     "@jsenv/package-publish": "1.2.0",
-    "@jsenv/prettier-check-project": "4.2.0",
+    "@jsenv/prettier-check-project": "5.0.0",
     "@jsenv/prettier-config": "1.1.0",
     "babel-eslint": "11.0.0-beta.0",
     "eslint": "6.8.0",
     "prettier": "1.19.1",
-    "react": "16.9.0",
     "rimraf": "3.0.0"
   }
 }

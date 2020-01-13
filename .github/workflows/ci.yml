@@ -30,7 +30,7 @@ jobs:
       - name: code quality
         run: npm run eslint-check
       - name: code format
-        run: npm run prettier-check
+        run: npm run format-with-prettier -- --dry-run
       - name: testing
         run: npm run test-with-coverage
         env:
