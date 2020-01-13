@@ -344,12 +344,259 @@ const writeDirectory = async (destination, {
   }
 };
 
+const readDirectory = async (url, {
+  emfileMaxWait = 1000
+} = {}) => {
+  const directoryUrl = assertAndNormalizeDirectoryUrl(url);
+  const directoryPath = urlToFileSystemPath(directoryUrl);
+  const startMs = Date.now();
+  let attemptCount = 0;
+
+  const attempt = () => {
+    return readdirNaive(directoryPath, {
+      handleTooManyFilesOpenedError: async error => {
+        attemptCount++;
+        const nowMs = Date.now();
+        const timeSpentWaiting = nowMs - startMs;
+
+        if (timeSpentWaiting > emfileMaxWait) {
+          throw error;
+        }
+
+        return new Promise(resolve => {
+          setTimeout(() => {
+            resolve(attempt());
+          }, attemptCount);
+        });
+      }
+    });
+  };
+
+  return attempt();
+};
+
+const readdirNaive = (directoryPath, {
+  handleTooManyFilesOpenedError = null
+} = {}) => {
+  return new Promise((resolve, reject) => {
+    fs.readdir(directoryPath, (error, names) => {
+      if (error) {
+        // https://nodejs.org/dist/latest-v13.x/docs/api/errors.html#errors_common_system_errors
+        if (handleTooManyFilesOpenedError && (error.code === "EMFILE" || error.code === "ENFILE")) {
+          resolve(handleTooManyFilesOpenedError(error));
+        } else {
+          reject(error);
+        }
+      } else {
+        resolve(names);
+      }
+    });
+  });
+};
+
 const resolveUrl = (specifier, baseUrl) => {
   if (typeof baseUrl === "undefined") {
     throw new TypeError(`baseUrl missing to resolve ${specifier}`);
   }
 
   return String(new URL(specifier, baseUrl));
+};
+
+const removeFileSystemNode = async (source, {
+  allowUseless = false,
+  recursive = false,
+  maxRetries = 3,
+  retryDelay = 100,
+  onlyContent = false
+} = {}) => {
+  const sourceUrl = assertAndNormalizeFileUrl(source);
+  const sourceStats = await readFileSystemNodeStat(sourceUrl, {
+    nullIfNotFound: true,
+    followLink: false
+  });
+
+  if (!sourceStats) {
+    if (allowUseless) {
+      return;
+    }
+
+    throw new Error(`nothing to remove at ${urlToFileSystemPath(sourceUrl)}`);
+  } // https://nodejs.org/dist/latest-v13.x/docs/api/fs.html#fs_class_fs_stats
+  // FIFO and socket are ignored, not sure what they are exactly and what to do with them
+  // other libraries ignore them, let's do the same.
+
+
+  if (sourceStats.isFile() || sourceStats.isSymbolicLink() || sourceStats.isCharacterDevice() || sourceStats.isBlockDevice()) {
+    await removeNonDirectory(sourceUrl.endsWith("/") ? sourceUrl.slice(0, -1) : sourceUrl, {
+      maxRetries,
+      retryDelay
+    });
+  } else if (sourceStats.isDirectory()) {
+    await removeDirectory(ensureUrlTrailingSlash(sourceUrl), {
+      recursive,
+      maxRetries,
+      retryDelay,
+      onlyContent
+    });
+  }
+};
+
+const removeNonDirectory = (sourceUrl, {
+  maxRetries,
+  retryDelay
+}) => {
+  const sourcePath = urlToFileSystemPath(sourceUrl);
+  let retryCount = 0;
+
+  const attempt = () => {
+    return unlinkNaive(sourcePath, { ...(retryCount >= maxRetries ? {} : {
+        handleTemporaryError: async () => {
+          retryCount++;
+          return new Promise(resolve => {
+            setTimeout(() => {
+              resolve(attempt());
+            }, retryCount * retryDelay);
+          });
+        }
+      })
+    });
+  };
+
+  return attempt();
+};
+
+const unlinkNaive = (sourcePath, {
+  handleTemporaryError = null
+} = {}) => {
+  return new Promise((resolve, reject) => {
+    fs.unlink(sourcePath, error => {
+      if (error) {
+        if (error.code === "ENOENT") {
+          resolve();
+        } else if (handleTemporaryError && (error.code === "EBUSY" || error.code === "EMFILE" || error.code === "ENFILE" || error.code === "ENOENT")) {
+          resolve(handleTemporaryError(error));
+        } else {
+          reject(error);
+        }
+      } else {
+        resolve();
+      }
+    });
+  });
+};
+
+const removeDirectory = async (rootDirectoryUrl, {
+  maxRetries,
+  retryDelay,
+  recursive,
+  onlyContent
+}) => {
+  const visit = async sourceUrl => {
+    const sourceStats = await readFileSystemNodeStat(sourceUrl, {
+      nullIfNotFound: true,
+      followLink: false
+    }); // file/directory not found
+
+    if (sourceStats === null) {
+      return;
+    }
+
+    if (sourceStats.isFile() || sourceStats.isCharacterDevice() || sourceStats.isBlockDevice()) {
+      await visitFile(sourceUrl);
+    } else if (sourceStats.isSymbolicLink()) {
+      await visitSymbolicLink(sourceUrl);
+    } else if (sourceStats.isDirectory()) {
+      await visitDirectory(`${sourceUrl}/`);
+    }
+  };
+
+  const visitDirectory = async directoryUrl => {
+    const directoryPath = urlToFileSystemPath(directoryUrl);
+    const optionsFromRecursive = recursive ? {
+      handleNotEmptyError: async () => {
+        await removeDirectoryContent(directoryUrl);
+        await visitDirectory(directoryUrl);
+      }
+    } : {};
+    await removeDirectoryNaive(directoryPath, { ...optionsFromRecursive,
+      // Workaround for https://github.com/joyent/node/issues/4337
+      ...(process.platform === "win32" ? {
+        handlePermissionError: async error => {
+          // try to close an open descriptor to that directory
+          await new Promise((resolve, reject) => {
+            fs.open(directoryPath, "r", (openError, fd) => {
+              if (fd) {
+                fs.close(fd, closeError => {
+                  if (closeError) {
+                    reject(error);
+                  } else {
+                    resolve();
+                  }
+                });
+              } else {
+                reject(error);
+              }
+            });
+          });
+          await removeDirectoryNaive(directoryPath, { ...optionsFromRecursive
+          });
+        }
+      } : {})
+    });
+  };
+
+  const removeDirectoryContent = async directoryUrl => {
+    const names = await readDirectory(directoryUrl);
+    await Promise.all(names.map(async name => {
+      const url = resolveUrl(name, directoryUrl);
+      await visit(url);
+    }));
+  };
+
+  const visitFile = async fileUrl => {
+    await removeNonDirectory(fileUrl, {
+      maxRetries,
+      retryDelay
+    });
+  };
+
+  const visitSymbolicLink = async symbolicLinkUrl => {
+    await removeNonDirectory(symbolicLinkUrl, {
+      maxRetries,
+      retryDelay
+    });
+  };
+
+  if (onlyContent) {
+    await removeDirectoryContent(rootDirectoryUrl);
+  } else {
+    await visitDirectory(rootDirectoryUrl);
+  }
+};
+
+const removeDirectoryNaive = (directoryPath, {
+  handleNotEmptyError = null,
+  handlePermissionError = null
+} = {}) => {
+  return new Promise((resolve, reject) => {
+    fs.rmdir(directoryPath, (error, lstatObject) => {
+      if (error) {
+        if (handlePermissionError && error.code === "EPERM") {
+          resolve(handlePermissionError(error));
+        } else if (error.code === "ENOENT") {
+          resolve();
+        } else if (handleNotEmptyError && ( // linux os
+        error.code === "ENOTEMPTY" || // SunOS
+        error.code === "EEXIST")) {
+          resolve(handleNotEmptyError(error));
+        } else {
+          reject(error);
+        }
+      } else {
+        resolve(lstatObject);
+      }
+    });
+  });
 };
 
 const isWindows$1 = process.platform === "win32";
@@ -475,42 +722,18 @@ const error = console.error;
 
 const errorDisabled = () => {};
 
-const readGitHooksFromPackage = async ({
-  logger,
-  projectDirectoryUrl
-}) => {
-  const packageJsonFileUrl = resolveUrl("package.json", projectDirectoryUrl);
-  const packageJsonFileString = await readFile(packageJsonFileUrl);
-  const packageJsonData = JSON.parse(packageJsonFileString);
-  const {
-    scripts
-  } = packageJsonData;
-  const gitHooks = {};
-  Object.keys(scripts).forEach(key => {
-    if (key.startsWith("git-hook-")) {
-      const hookName = key.slice("git-hook-".length);
-
-      if (!hookList.includes(hookName)) {
-        logger.warn(`
-unknow hook: ${hookName}
---- available hooks ---
-${hookList.join(`
-`)}
-`);
-        return;
-      }
-
-      gitHooks[hookName] = scripts[key];
-    }
-  });
-  return gitHooks;
+const HOOK_NAMES = ["applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update", "post-receive", "post-update", "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate"];
+const generateHookFileContent = hookCommand => `#!/bin/sh
+# Generated by @jsenv/git-hooks
+${hookCommand}`;
+const hookIsGeneratedByUs = hookFileContent => {
+  return hookFileContent.includes(`# Generated by @jsenv/git-hooks`);
 };
-const hookList = ["applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update", "post-receive", "post-update", "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate"];
 
 const isWindows$3 = process.platform === "win32"; // https://github.com/typicode/husky/blob/master/src/installer/getScript.ts
 
 const installGitHooks = async ({
-  logLevel = "debug",
+  logLevel,
   projectDirectoryUrl,
   ci = process.env.CI
 }) => {
@@ -519,84 +742,137 @@ const installGitHooks = async ({
   });
 
   if (ci) {
-    logger.debug(`ci -> skip installGitHooks`);
+    logger.info(`ci -> skip installGitHooks`);
     return;
   }
 
   projectDirectoryUrl = assertAndNormalizeDirectoryUrl(projectDirectoryUrl);
-  const gitHooks = await readGitHooksFromPackage({
-    logger,
-    projectDirectoryUrl
-  });
-  const gitHookNames = Object.keys(gitHooks);
-
-  if (gitHookNames.length === 0) {
-    logger.debug(`no git hooks in package.json scripts`);
-    return;
-  }
-
-  await Promise.all(gitHookNames.map(async hookName => {
-    const hookCommand = gitHooks[hookName];
-    const gitHookFileUrl = resolveUrl(`.git/hooks/${hookName}`, projectDirectoryUrl);
-    const gitHookFileContent = `#!/bin/sh
-${hookCommand}`; // should we add exit 0 ?
-
-    const gitHookFileStats = await readFileSystemNodeStat(gitHookFileUrl, {
+  const packageJsonFileUrl = resolveUrl("package.json", projectDirectoryUrl);
+  const packageJsonFileString = await readFile(packageJsonFileUrl);
+  const packageJsonData = JSON.parse(packageJsonFileString);
+  const {
+    scripts = {}
+  } = packageJsonData;
+  await Promise.all(HOOK_NAMES.map(async hookName => {
+    const hookScriptName = `git-hook-${hookName}`;
+    const hookFileUrl = resolveUrl(`.git/hooks/${hookName}`, projectDirectoryUrl);
+    const hookFileStats = await readFileSystemNodeStat(hookFileUrl, {
       nullIfNotFound: true
     });
+    const hookScriptPresence = hookScriptName in scripts;
+    const hookFilePresence = Boolean(hookFileStats);
 
-    if (gitHookFileStats) {
-      const gitHookFilePreviousContent = await readFile(gitHookFileUrl);
+    if (hookFilePresence) {
+      const hookFileContent = await readFile(hookFileUrl);
 
-      if (gitHookFilePreviousContent === gitHookFileContent) {
-        logger.debug(`already installed git ${hookName} hook`);
+      if (!hookIsGeneratedByUs(hookFileContent)) {
+        if (hookScriptPresence) {
+          logger.info(`
+ignore ${hookScriptName} script because there is a git ${hookName} hook file not generated by us.`);
+        }
+
         return;
       }
 
-      logger.debug(`
-update git ${hookName} hook
---- previous file content ---
-${gitHookFilePreviousContent}
---- file content ---
-${gitHookFileContent}
---- file ---
-${urlToFileSystemPath(gitHookFileUrl)}`);
-    } else {
-      logger.debug(`
-write git ${hookName} hook
---- file content ---
-${gitHookFileContent}
---- file ---
-${urlToFileSystemPath(gitHookFileUrl)}`);
-    }
+      if (hookScriptPresence) {
+        const hookFileContentForScript = generateHookFileContent(scripts[hookScriptName]);
 
-    await writeFile(gitHookFileUrl, gitHookFileContent);
-
-    if (!isWindows$3) {
-      await writeFileSystemNodePermissions(gitHookFileUrl, {
-        owner: {
-          read: true,
-          write: true,
-          execute: true
-        },
-        group: {
-          read: true,
-          write: false,
-          execute: true
-        },
-        others: {
-          read: true,
-          write: false,
-          execute: true
+        if (hookFileContentForScript === hookFileContent) {
+          logger.debug(`
+keep existing git ${hookName} hook file.
+--- file ---
+${urlToFileSystemPath(hookFileUrl)}`);
+          return;
         }
-      });
+
+        logger.info(`
+overwrite git ${hookName} hook file.
+--- file ---
+${urlToFileSystemPath(hookFileUrl)}
+--- previous file content ---
+${hookFileContent}
+--- file content ---
+${hookFileContentForScript}`);
+        await writeHook(hookFileUrl, hookFileContentForScript);
+      } else {
+        logger.info(`
+remove git ${hookName} hook file.
+--- file ---
+${urlToFileSystemPath(hookFileUrl)}
+--- file content ---
+${hookFileContent}`);
+        await removeFileSystemNode(hookFileUrl);
+      }
+    } else if (hookScriptPresence) {
+      const hookFileContentForScript = generateHookFileContent(scripts[hookScriptName]);
+      logger.info(`
+write git ${hookName} hook file.
+--- file ---
+${urlToFileSystemPath(hookFileUrl)}
+--- file content ---
+${hookFileContentForScript}`);
+      await writeHook(hookFileUrl, hookFileContentForScript);
     }
   }));
 };
 
-const uninstallGitHooks = () => {};
+const writeHook = async (hookFileUrl, hookFileContent) => {
+  await writeFile(hookFileUrl, hookFileContent);
+
+  if (!isWindows$3) {
+    await writeFileSystemNodePermissions(hookFileUrl, {
+      owner: {
+        read: true,
+        write: true,
+        execute: true
+      },
+      group: {
+        read: true,
+        write: false,
+        execute: true
+      },
+      others: {
+        read: true,
+        write: false,
+        execute: true
+      }
+    });
+  }
+};
+
+const uninstallGitHooks = async ({
+  logLevel,
+  projectDirectoryUrl
+}) => {
+  const logger = createLogger({
+    logLevel
+  });
+  projectDirectoryUrl = assertAndNormalizeDirectoryUrl(projectDirectoryUrl);
+  await Promise.all(HOOK_NAMES.map(async hookName => {
+    const hookFileUrl = resolveUrl(`.git/hooks/${hookName}`, projectDirectoryUrl);
+    logger.debug(`seach file for git ${hookName} hook at ${urlToFileSystemPath(hookFileUrl)}`);
+    let hookFileContent;
+
+    try {
+      hookFileContent = await readFile(hookFileUrl);
+    } catch (e) {
+      if (e.code === "ENOENT") {
+        logger.debug(`no file for git ${hookName} hook`);
+        return;
+      }
+
+      throw e;
+    }
+
+    if (hookIsGeneratedByUs(hookFileContent)) {
+      logger.info(`remove git ${hookName} hook file at ${urlToFileSystemPath(hookFileUrl)}`);
+      await removeFileSystemNode(hookFileUrl);
+    } else {
+      logger.debug(`ignore git ${hookName} hook at ${urlToFileSystemPath(hookFileUrl)} because not generated by us.`);
+    }
+  }));
+};
 
 exports.installGitHooks = installGitHooks;
-exports.readGitHooksFromPackage = readGitHooksFromPackage;
 exports.uninstallGitHooks = uninstallGitHooks;
 //# sourceMappingURL=main.js.map
