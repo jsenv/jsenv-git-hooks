@@ -9,9 +9,8 @@ Declare git hooks in your package.json.
 
 # Table of contents
 
-- [Description](#Description)
+- [Presentation](#Presentation)
 - [Installation](#Installation)
-  - [Usage](#Usage)
 - [Documentation](#Documentation)
   - [installGitHooks](#installGitHooks)
     - [projectDirectoryUrl](#projectDirectoryUrl)
@@ -19,7 +18,7 @@ Declare git hooks in your package.json.
   - [uninstallGitHooks](#uninstallGitHooks)
 - [Why](#Why)
 
-# Description
+# Presentation
 
 `@jsenv/git-hooks` create a git hook for every scripts your package.json matching `git-hook-*`.
 
@@ -28,8 +27,6 @@ Declare git hooks in your package.json.
 ```console
 npm install @jsenv/git-hooks@1.2.0
 ```
-
-## Usage
 
 ```js
 import { installGitHooks } from "@jsenv/git-hooks"
