@@ -1,8 +1,8 @@
 {
   "name": "@jsenv/git-hooks",
   "type": "module",
-  "description": "Install git hooks from package.json.",
-  "version": "1.1.0",
+  "description": "Declare git hooks in your package.json.",
+  "version": "1.2.0-alpha.0",
   "license": "MIT",
   "repository": {
     "type": "git",
