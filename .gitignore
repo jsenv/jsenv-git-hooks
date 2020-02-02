@@ -3,7 +3,6 @@
 /coverage/
 /node_modules/
 /test/**/temp/
-/test/**/temp/
 /importMap.json
 /jsconfig.json
 /package-lock.json

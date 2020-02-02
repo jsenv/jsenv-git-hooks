@@ -25,7 +25,7 @@ Declare git hooks in your package.json.
 # Installation
 
 ```console
-npm install @jsenv/git-hooks@1.2.0
+npm install @jsenv/git-hooks@1.3.0
 ```
 
 ```js
